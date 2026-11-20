@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CMF Watch Pro 2 — BLE App Loader v3 (Debug Console)</title>
+<style>
+  :root {
+    --bg: #000000;
+    --surface: #1E2126;
+    --surface-hi: #2B2F36;
+    --accent: #E83C18;
+    --text: #FFFFFF;
+    --dim: #8E9299;
+    --ok: #2ED54A;
+  }
+  * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--text); display: flex; justify-content: center; padding: 16px; }
+  .app { width: 100%; max-width: 540px; }
+  h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 16px; }
+  .card { background: var(--surface); border-radius: 22px; padding: 16px; margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button {
+    border: none; border-radius: 999px; padding: 10px 15px; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: opacity .15s;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: #F2F2F2; color: #141619; }
+  .btn-accent { background: var(--accent); color: #FFF; }
+  .btn-dark { background: var(--surface-hi); color: #FFF; }
+  .slots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px; }
+  .slot {
+    background: var(--surface-hi); border-radius: 16px; padding: 10px 12px; cursor: pointer;
+    border: 2px solid transparent; transition: border-color .15s;
+  }
+  .slot.selected { border-color: var(--accent); }
+  .slot-title { font-weight: 600; font-size: 13px; }
+  .slot-meta { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  input[type="file"], input[type="text"], select {
+    width: 100%; background: var(--surface-hi); color: #FFF; border: 1px solid #3A3E45;
+    border-radius: 12px; padding: 9px 11px; font-size: 13px; margin-top: 6px;
+  }
+  .progress-wrap { height: 8px; background: var(--surface-hi); border-radius: 999px; overflow: hidden; margin-top: 10px; }
+  .progress-bar { height: 100%; width: 0%; background: var(--accent); transition: width .1s; }
+  .log {
+    background: #0B0D10; border-radius: 14px; padding: 10px; font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px; line-height: 1.45; color: #C5CBD6; max-height: 300px; overflow-y: auto; white-space: pre-wrap; margin-top: 10px;
+    word-break: break-all;
+  }
+  .badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--surface-hi); color: var(--dim); }
+  .badge.ok { background: rgba(46,213,74,.18); color: var(--ok); }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>CMF Watch Pro 2 · BLE Loader v3</h1>
+  <div class="sub">Расширенная диагностическая консоль TX/RX (протокол 0xBB, PSRAM / XIP)</div>
+
+  <div class="card">
+    <div class="row" style="justify-content: space-between;">
+      <span id="statusBadge" class="badge">Не подключено</span>
+      <div class="row">
+        <button id="btnConnect" class="btn-primary">Подключить (BLE)</button>
+        <button id="btnQuery" class="btn-dark" disabled>0xFFFD Слоты</button>
+      </div>
+    </div>
+    <details style="margin-top: 10px; color: var(--dim); font-size: 12px;">
+      <summary style="cursor:pointer;">Параметры GATT UUID и режим записи</summary>
+      <label>Service UUID:</label>
+      <input id="svcUuid" type="text" value="0000fff0-0000-1000-8000-00805f9b34fb">
+      <label>Write Characteristic UUID:</label>
+      <input id="txUuid" type="text" value="0000fff2-0000-1000-8000-00805f9b34fb">
+      <label>Notify Characteristic UUID:</label>
+      <input id="rxUuid" type="text" value="0000fff1-0000-1000-8000-00805f9b34fb">
+      <label>Метод записи GATT:</label>
+      <select id="writeMode">
+        <option value="auto">Auto (предпочтительно WithResponse)</option>
+        <option value="without">Только WriteWithoutResponse</option>
+        <option value="with">Только WriteWithResponse</option>
+      </select>
+    </details>
+  </div>
+
+  <div class="card">
+    <div style="font-weight: 600; font-size: 14px;">Слот (0..7)</div>
+    <div id="slotsGrid" class="slots"></div>
+  </div>
+
+  <div class="card">
+    <div style="font-weight: 600; font-size: 14px;">Файл приложения (.app)</div>
+    <input id="fileInput" type="file" accept=".app,.bin">
+    <div id="fileInfo" class="sub" style="margin: 6px 0 10px;">Файл не выбран (макс. 16 384 Б, PATY)</div>
+    <div class="row">
+      <button id="btnInstall" class="btn-accent" disabled>Установить в слот</button>
+      <button id="btnErase" class="btn-dark" disabled>Очистить (0xFFFE)</button>
+      <button id="btnTestWr" class="btn-dark" disabled>Тест 1 пакет (5 Б)</button>
+    </div>
+    <div class="progress-wrap"><div id="progBar" class="progress-bar"></div></div>
+    <div class="row" style="margin-top: 10px; justify-content: space-between;">
+      <span style="font-size:12px; color:var(--dim);">Подробный BLE TX/RX лог:</span>
+      <div class="row">
+        <button id="btnCopyLog" class="btn-dark" style="padding:6px 12px; font-size:11px;">Копировать лог</button>
+        <button id="btnClearLog" class="btn-dark" style="padding:6px 12px; font-size:11px;">Очистить</button>
+      </div>
+    </div>
+    <div id="logBox" class="log">Готов к диагностике. Подключите часы.</div>
+  </div>
+</div>
+
+<script>
+const APPLET_MAGIC = 0x59544150;
+const SLOT_SIZE = 0x4000;
+const CHUNK_SIZE = 5; // 6 + 5 = 11 bytes (fits single wewear_read(..., 11))
+
+let device = null, txChar = null, rxChar = null;
+let selectedSlot = 3;
+let appBytes = null;
+let xipMask = 0, romMask = 0x07;
+let ackResolve = null;
+let txSeq = 0;
+
+const logEl = document.getElementById('logBox');
+const progBar = document.getElementById('progBar');
+const statusBadge = document.getElementById('statusBadge');
+
+function tsNow() {
+  const d = new Date();
+  const pad = (n, w=2) => String(n).padStart(w, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
+function toHex(arr) {
+  return Array.from(arr, b => b.toString(16).padStart(2, '0')).join(' ');
+}
+
+function log(msg) {
+  logEl.textContent += `\n[${tsNow()}] ${msg}`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function renderSlots() {
+  const grid = document.getElementById('slotsGrid');
+  grid.innerHTML = '';
+  const romNames = ['Snake (ROM)', 'Flappy Bird (ROM)', 'Tic-Tac-Toe (ROM)'];
+  for (let i = 0; i < 8; i++) {
+    const hasXip = (xipMask & (1 << i)) !== 0;
+    const hasRom = (romMask & (1 << i)) !== 0;
+    const div = document.createElement('div');
+    div.className = 'slot' + (i === selectedSlot ? ' selected' : '');
+    let meta = 'Пустой слот';
+    if (hasXip) meta = 'Установлено по BLE';
+    else if (hasRom) meta = romNames[i] || 'Built-in ROM';
+    div.innerHTML = `<div class="slot-title">Slot ${i}</div><div class="slot-meta">${meta}</div>`;
+    div.onclick = () => { selectedSlot = i; renderSlots(); };
+    grid.appendChild(div);
+  }
+}
+renderSlots();
+
+function onNotify(event) {
+  const data = new Uint8Array(event.target.value.buffer, event.target.value.byteOffset, event.target.value.byteLength);
+  log(`RX << (${data.length} Б) [${toHex(data)}]`);
+  if (data.length >= 6 && data[0] === 0xBB) {
+    if (data[1] === 0xFD && data.length >= 6) {
+      xipMask = data[2];
+      romMask = data[3];
+      renderSlots();
+      log(`   ↳ Инвентарь: XIP=0x${xipMask.toString(16)} ROM=0x${romMask.toString(16)} slots=${data[4]} SDK=v${(data[5]>>4)}.${data[5]&0xF}`);
+    } else {
+      const off = data[2] | (data[3] << 8);
+      const st = data[4] | (data[5] << 8);
+      log(`   ↳ ACK slot=${data[1]} off=0x${off.toString(16)} status=${st}`);
+    }
+    if (ackResolve) { const r = ackResolve; ackResolve = null; r(data); }
+  } else {
+    log(`   ↳ Не-0xBB пакет (игнорируется для ACK, возможно стоковый wewear)`);
+  }
+}
+
+async function sendWithAck(pkt, label, timeoutMs = 4500) {
+  txSeq++;
+  const seq = txSeq;
+  const mode = document.getElementById('writeMode').value;
+  let usedMethod = 'writeValue';
+  const t0 = performance.now();
+
+  const p = new Promise((res, rej) => {
+    ackResolve = res;
+    setTimeout(() => {
+      if (ackResolve) {
+        ackResolve = null;
+        const dt = Math.round(performance.now() - t0);
+        rej(new Error(`Таймаут ACK (${dt} мс) на #${seq} ${label}, gatt.connected=${device?.gatt?.connected}`));
+      }
+    }, timeoutMs);
+  });
+
+  log(`TX #${seq} >> ${label} (${pkt.length} Б) [${toHex(pkt)}]`);
+  try {
+    if (mode === 'without' && txChar.writeValueWithoutResponse) {
+      usedMethod = 'writeValueWithoutResponse';
+      await txChar.writeValueWithoutResponse(pkt);
+    } else if (mode === 'with' && txChar.writeValueWithResponse) {
+      usedMethod = 'writeValueWithResponse';
+      await txChar.writeValueWithResponse(pkt);
+    } else if (txChar.writeValueWithResponse && txChar.properties?.write) {
+      usedMethod = 'writeValueWithResponse';
+      await txChar.writeValueWithResponse(pkt);
+    } else if (txChar.writeValueWithoutResponse) {
+      usedMethod = 'writeValueWithoutResponse';
+      await txChar.writeValueWithoutResponse(pkt);
+    } else {
+      await txChar.writeValue(pkt);
+    }
+    const dtWr = Math.round(performance.now() - t0);
+    log(`   ↳ GATT ${usedMethod} OK за ${dtWr} мс, жду RX ACK...`);
+  } catch (err) {
+    ackResolve = null;
+    log(`   ↳ ОШИБКА GATT ${usedMethod}: ${err.name}: ${err.message}`);
+    throw err;
+  }
+
+  const resp = await p;
+  log(`   ↳ Цикл #${seq} завершён за ${Math.round(performance.now() - t0)} мс.`);
+  return resp;
+}
+
+function makePacket(slot, offset, payload = new Uint8Array(0)) {
+  const pkt = new Uint8Array(6 + payload.length);
+  const dv = new DataView(pkt.buffer);
+  pkt[0] = 0xBB;
+  pkt[1] = slot;
+  dv.setUint16(2, offset, true);
+  dv.setUint16(4, payload.length, true);
+  pkt.set(payload, 6);
+  return pkt;
+}
+
+document.getElementById('btnConnect').onclick = async () => {
+  try {
+    const svcUuid = document.getElementById('svcUuid').value.trim();
+    const txUuid = document.getElementById('txUuid').value.trim();
+    const rxUuid = document.getElementById('rxUuid').value.trim();
+    log(`Поиск устройства (svc=${svcUuid})...`);
+    device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [svcUuid]
+    });
+    log(`Выбрано: name="${device.name}" id=${device.id}`);
+    device.addEventListener('gattserverdisconnected', () => {
+      log(`*** СОБЫТИЕ: gattserverdisconnected! Часы разорвали BLE (или перезагрузились). ***`);
+      statusBadge.textContent = 'Отключено';
+      statusBadge.className = 'badge';
+    });
+
+    const server = await device.gatt.connect();
+    log(`GATT подключён (connected=${server.connected}).`);
+    const service = await server.getPrimaryService(svcUuid);
+    txChar = await service.getCharacteristic(txUuid);
+    rxChar = await service.getCharacteristic(rxUuid);
+    const tp = txChar.properties;
+    const rp = rxChar.properties;
+    log(`TX props: write=${tp.write}, writeNoResp=${tp.writeWithoutResponse}`);
+    log(`RX props: notify=${rp.notify}, indicate=${rp.indicate}`);
+
+    await rxChar.startNotifications();
+    rxChar.addEventListener('characteristicvaluechanged', onNotify);
+    statusBadge.textContent = `Подключено: ${device.name || 'CMF Watch'}`;
+    statusBadge.className = 'badge ok';
+    document.getElementById('btnQuery').disabled = false;
+    document.getElementById('btnErase').disabled = false;
+    document.getElementById('btnTestWr').disabled = false;
+    if (appBytes) document.getElementById('btnInstall').disabled = false;
+    log('Уведомления RX включены! Запрашиваю инвентарь 0xFFFD...');
+    await sendWithAck(makePacket(0, 0xFFFD), 'QUERY_SLOTS(0xFFFD)');
+  } catch (e) {
+    log(`ОШИБКА подключения: ${e.name || 'Error'}: ${e.message}`);
+  }
+};
+
+document.getElementById('btnQuery').onclick = async () => {
+  try { await sendWithAck(makePacket(0, 0xFFFD), 'QUERY_SLOTS(0xFFFD)'); }
+  catch (e) { log('ОШИБКА 0xFFFD: ' + e.message); }
+};
+
+document.getElementById('btnTestWr').onclick = async () => {
+  if (!txChar) return;
+  try {
+    const test5 = new Uint8Array([0x50, 0x41, 0x54, 0x59, 0x20]); // "PATY "
+    await sendWithAck(makePacket(selectedSlot, 0x0000, test5), `TEST_WRITE_5B(slot=${selectedSlot}, off=0)`);
+  } catch (e) {
+    log('ОШИБКА TEST_WRITE: ' + e.message);
+  }
+};
+
+document.getElementById('fileInput').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf.length < 32 || buf.length > SLOT_SIZE) {
+    log(`ОШИБКА файла: размер ${buf.length} Б вне 32..16384`);
+    return;
+  }
+  const dv = new DataView(buf.buffer);
+  const magic = dv.getUint32(0, true);
+  if (magic !== APPLET_MAGIC) {
+    log(`ОШИБКА файла: magic=0x${magic.toString(16)} != 0x59544150`);
+    return;
+  }
+  const name = new TextDecoder().decode(buf.slice(16, 32)).replace(/\0.*$/, '');
+  appBytes = buf;
+  document.getElementById('fileInfo').textContent = `Готов: "${name}" (${buf.length} Б)`;
+  if (txChar) document.getElementById('btnInstall').disabled = false;
+  log(`Файл "${file.name}" загружен ("${name}", ${buf.length} Б, ~${Math.ceil(buf.length / CHUNK_SIZE)} пакетов по ${CHUNK_SIZE} Б).`);
+};
+
+document.getElementById('btnInstall').onclick = async () => {
+  if (!appBytes || !txChar) return;
+  try {
+    progBar.style.width = '0%';
+    log(`=== СТАРТ УСТАНОВКИ slot=${selectedSlot} (${appBytes.length} Б, chunk=${CHUNK_SIZE} Б) ===`);
+    for (let off = 0; off < appBytes.length; off += CHUNK_SIZE) {
+      const chunk = appBytes.slice(off, Math.min(off + CHUNK_SIZE, appBytes.length));
+      await sendWithAck(makePacket(selectedSlot, off, chunk), `WR(off=0x${off.toString(16)}, len=${chunk.length})`);
+      progBar.style.width = Math.round(((off + chunk.length) / appBytes.length) * 100) + '%';
+    }
+    await sendWithAck(makePacket(selectedSlot, 0xFFFF), `FINALIZE(slot=${selectedSlot})`);
+    log(`=== УСПЕШНО УСТАНОВЛЕНО в slot=${selectedSlot}! ===`);
+    await sendWithAck(makePacket(0, 0xFFFD), 'QUERY_SLOTS(0xFFFD)');
+  } catch (e) {
+    log('ОШИБКА УСТАНОВКИ: ' + e.message);
+  }
+};
+
+document.getElementById('btnErase').onclick = async () => {
+  if (!txChar) return;
+  try {
+    log(`=== СТИРАНИЕ slot=${selectedSlot} (0xFFFE) ===`);
+    await sendWithAck(makePacket(selectedSlot, 0xFFFE), `ERASE(slot=${selectedSlot})`, 6000);
+    await sendWithAck(makePacket(0, 0xFFFD), 'QUERY_SLOTS(0xFFFD)');
+  } catch (e) {
+    log('ОШИБКА СТИРАНИЯ: ' + e.message);
+  }
+};
+
+document.getElementById('btnCopyLog').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(logEl.textContent);
+    log('Лог скопирован в буфер обмена!');
+  } catch (e) {
+    log('Не удалось скопировать автоматически — выделите текст вручную.');
+  }
+};
+
+document.getElementById('btnClearLog').onclick = () => {
+  logEl.textContent = 'Лог очищен.';
+};
+</script>
+</body>
+</html>
